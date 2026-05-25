@@ -1,0 +1,13 @@
+# Python environments and caches
+venv/
+__pycache__/
+*.py[cod]
+
+# PyInstaller build artifacts
+build/
+dist/
+
+# Local documents and recorded material
+pdf/
+*.mp4
+
