@@ -1,27 +1,23 @@
+"""
+Consolidated utility functions for duyet van hanh automation.
+Extracted from duyetvanhanh2.py to avoid code duplication.
+"""
+
 import time
 import traceback
-import threading
 import re
 import os
 import csv
 from datetime import datetime
+from tkinter import filedialog, messagebox
+import threading
 
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
-
-
-BASE_URL = "https://dla.mplis.gov.vn/dc/ThuThapThongTin"
 
 
 # =========================================================
@@ -54,27 +50,31 @@ def get_login_fields(wait):
 # WAIT AJAX / LOADING
 # =========================================================
 
-def wait_query_done(driver, timeout=30, ajax_wait=5):
-    def wait_loading_mask(driver, timeout=10):
-        try:
-            WebDriverWait(driver, timeout).until(
-                EC.invisibility_of_element_located(
-                    (By.CSS_SELECTOR, "div.jquery-loading-modal_bg")
-                )
+def wait_loading_mask(driver, timeout=10):
+    """Chờ lớp loading mask của jQuery biến mất"""
+    try:
+        WebDriverWait(driver, timeout).until(
+            EC.invisibility_of_element_located(
+                (By.CSS_SELECTOR, "div.jquery-loading-modal_bg")
             )
-        except:
-            pass
+        )
+    except:
+        pass
 
-        try:
-            driver.execute_script("""
-                document.querySelectorAll('div.jquery-loading-modal_bg')
-                        .forEach(e => e.remove());
-            """)
-        except:
-            pass
+    # DỌN loading mask còn sót (opacity 0 vẫn block click)
+    try:
+        driver.execute_script("""
+            document.querySelectorAll('div.jquery-loading-modal_bg')
+                    .forEach(e => e.remove());
+        """)
+    except:
+        pass
 
+
+def wait_query_done(driver, timeout=30, ajax_wait=5):
     end_time = time.time() + timeout
 
+    # Đảm bảo jQuery tồn tại
     try:
         WebDriverWait(driver, 5).until(
             lambda d: d.execute_script("return window.jQuery !== undefined;")
@@ -453,85 +453,66 @@ def get_active_frm_thua_dat(driver, timeout=20):
 
     return frm_thua_dat
 
-def scroll_modal_thuthap_to_bottom(driver, timeout=20):
-    """
-    Cuộn modal #mdlThuThapThongTinChiTiet-* và các vùng con xuống đáy
-    để hiện nút Lưu #btnSave-*.
-    """
-    modal = find_visible_element(
-        driver,
-        "div[id^='mdlThuThapThongTinChiTiet-']",
-        timeout=timeout,
-    )
 
+def scroll_deep_to_bottom(driver, root):
+    """
+    Cuộn root và toàn bộ div con có scrollbar xuống đáy.
+    Dùng cho #vModuleThuThapThongTinChiTiet.
+    """
     driver.execute_script("""
-        const modal = arguments[0];
+        const root = arguments[0];
 
-        function scrollToBottom(el) {
+        function scrollOne(el) {
             try {
-                if (el && el.scrollHeight > el.clientHeight) {
+                if (el.scrollHeight > el.clientHeight) {
                     el.scrollTop = el.scrollHeight;
                 }
             } catch(e) {}
         }
 
-        // Cuộn modal chính
-        scrollToBottom(modal);
+        scrollOne(root);
 
-        // Cuộn các vùng hay có scrollbar
-        const selectors = [
-            '.modal-body',
-            '.modal-content',
-            '#vModuleThuThapThongTinChiTiet',
-            '[id^="vModuleThuThapThongTinChiTiet"]',
-            '[id^="frmThuaDat-"]'
-        ];
+        const all = root.querySelectorAll('*');
+        all.forEach(el => scrollOne(el));
 
-        selectors.forEach(sel => {
-            modal.querySelectorAll(sel).forEach(el => scrollToBottom(el));
-        });
+        try {
+            root.scrollIntoView({block: 'end', inline: 'nearest'});
+        } catch(e) {}
+    """, root)
 
-        // Cuộn toàn bộ con có scrollbar
-        modal.querySelectorAll('*').forEach(el => scrollToBottom(el));
-
-        // Đẩy modal vào cuối viewport
-        modal.scrollIntoView({block: 'end', inline: 'nearest'});
-    """, modal)
-
-    time.sleep(0.3)
-
-    return modal
 
 def bam_nut_luu_thu_thap_chi_tiet(driver, timeout=20):
     """
-    Bấm nút Lưu #btnSave-* trong modal #mdlThuThapThongTinChiTiet-*.
-    Có cuộn modal cha, modal-body, module và các vùng con.
+    Tìm và bấm nút Lưu dạng #btnSave-* trong #vModuleThuThapThongTinChiTiet.
+    Có cuộn xuống đáy và nhiều cách bấm dự phòng.
     """
 
     wait = WebDriverWait(driver, timeout)
 
+    module = get_active_thuthap_module(driver, timeout=timeout)
+
+    # Cuộn xuống đáy nhiều lần vì modal có thể có scroll lồng nhau
+    for _ in range(8):
+        scroll_deep_to_bottom(driver, module)
+        time.sleep(0.2)
+
     btn_save = None
 
-    for lan in range(10):
-        print(f"🔽 Cuộn tìm nút Lưu lần {lan + 1}")
+    selectors = [
+        "#vModuleThuThapThongTinChiTiet button[id^='btnSave-']",
+        "#vModuleThuThapThongTinChiTiet a[id^='btnSave-']",
+        "button[id^='btnSave-']",
+        "a[id^='btnSave-']",
+        "#btnSave-afd9676c-6964-4386-8b40-9a9ae7d8490a",
+    ]
 
-        modal = scroll_modal_thuthap_to_bottom(driver, timeout=timeout)
-
-        selectors = [
-            "button[id^='btnSave-']",
-            "a[id^='btnSave-']",
-            "#vModuleThuThapThongTinChiTiet button[id^='btnSave-']",
-            "#vModuleThuThapThongTinChiTiet a[id^='btnSave-']",
-            "button.btn-green",
-            "a.btn-green",
-        ]
-
-        for css in selectors:
-            buttons = modal.find_elements(By.CSS_SELECTOR, css)
+    for css in selectors:
+        try:
+            buttons = driver.find_elements(By.CSS_SELECTOR, css)
 
             for btn in buttons:
                 try:
-                    if btn.is_displayed() and btn.is_enabled():
+                    if btn.is_displayed():
                         btn_save = btn
                         print(f"✅ Tìm thấy nút Lưu bằng selector: {css}")
                         break
@@ -541,36 +522,31 @@ def bam_nut_luu_thu_thap_chi_tiet(driver, timeout=20):
             if btn_save:
                 break
 
-        if btn_save:
-            break
-
-        time.sleep(0.3)
+        except:
+            continue
 
     if btn_save is None:
-        raise Exception("Không tìm thấy nút Lưu #btnSave-* trong modal thu thập thông tin chi tiết")
+        raise Exception("Không tìm thấy nút Lưu #btnSave-* đang hiển thị")
 
-    driver.execute_script("""
-        const btn = arguments[0];
-
-        btn.scrollIntoView({block: 'center', inline: 'nearest'});
-
-        document.querySelectorAll('div.jquery-loading-modal_bg').forEach(e => e.remove());
-        document.querySelectorAll('.modal-backdrop').forEach(e => {
-            if (!e.classList.contains('show')) e.remove();
-        });
-    """, btn_save)
-
+    # Cuộn đúng vào nút
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});",
+        btn_save
+    )
     time.sleep(0.4)
 
-    # Cách 1: JS click trực tiếp
+    # Dọn overlay/loading còn sót
     try:
-        driver.execute_script("arguments[0].click();", btn_save)
-        print("💾 Đã bấm nút Lưu bằng JS click")
-        return True
-    except Exception as e:
-        print(f"⚠ JS click nút Lưu thất bại: {e}")
+        driver.execute_script("""
+            document.querySelectorAll('div.jquery-loading-modal_bg')
+                    .forEach(e => e.remove());
+            document.querySelectorAll('.modal-backdrop')
+                    .forEach(e => e.remove());
+        """)
+    except:
+        pass
 
-    # Cách 2: ActionChains
+    # Cách 1: click thường bằng ActionChains
     try:
         ActionChains(driver).move_to_element(btn_save).pause(0.2).click().perform()
         print("💾 Đã bấm nút Lưu bằng ActionChains")
@@ -578,25 +554,31 @@ def bam_nut_luu_thu_thap_chi_tiet(driver, timeout=20):
     except Exception as e:
         print(f"⚠ ActionChains click nút Lưu thất bại: {e}")
 
-    # Cách 3: jQuery trigger
+    # Cách 2: JS click
+    try:
+        driver.execute_script("arguments[0].click();", btn_save)
+        print("💾 Đã bấm nút Lưu bằng JS click")
+        return True
+    except Exception as e:
+        print(f"⚠ JS click nút Lưu thất bại: {e}")
+
+    # Cách 3: trigger native MouseEvent
     try:
         driver.execute_script("""
             const btn = arguments[0];
-            if (window.jQuery) {
-                jQuery(btn).trigger('click');
-            } else {
-                btn.dispatchEvent(new MouseEvent('click', {
-                    bubbles: true,
-                    cancelable: true,
-                    view: window
-                }));
-            }
+            const evt = new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                view: window
+            });
+            btn.dispatchEvent(evt);
         """, btn_save)
 
-        print("💾 Đã bấm nút Lưu bằng jQuery/MouseEvent")
+        print("💾 Đã bấm nút Lưu bằng MouseEvent")
         return True
+
     except Exception as e:
-        print(f"⚠ jQuery/MouseEvent click nút Lưu thất bại: {e}")
+        print(f"⚠ MouseEvent click nút Lưu thất bại: {e}")
 
     raise Exception("Không thể bấm nút Lưu #btnSave-*")
 
@@ -715,7 +697,7 @@ def chon_thua_dat_trung_trong_modal(driver, modal, so_thua, so_to, timeout=20):
 
 
 # =========================================================
-# XÓA THỬA TRÙNG - CHỈ 1 HÀM DUY NHẤT
+# XÓA THỬA TRÙNG
 # =========================================================
 
 def xoa_thua_dat_trung_trong_modal(driver, modal, so_thua, so_to, timeout=20):
@@ -1139,10 +1121,28 @@ def xu_ly_mot_gcn(driver, ten_file, ma_gcn):
 
 
 # =========================================================
+# GUI HELPERS
+# =========================================================
+
+def browse_folder(folder_var):
+    folder = filedialog.askdirectory(title="Chọn folder chứa file PDF")
+
+    if folder:
+        folder_var.set(folder)
+
+
+# =========================================================
 # MAIN AUTOMATION
 # =========================================================
 
 def run_automation(username, password, maxa, folder_path):
+    """Main automation workflow for processing land parcels."""
+    from tkinter import messagebox
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from webdriver_manager.chrome import ChromeDriverManager
+    from selenium.webdriver.chrome.options import Options
+    
     driver = None
 
     try:
@@ -1163,7 +1163,7 @@ def run_automation(username, password, maxa, folder_path):
 
         wait = WebDriverWait(driver, 30)
 
-        driver.get(BASE_URL)
+        driver.get("https://dla.mplis.gov.vn/dc/ThuThapThongTin")
 
         username_box, password_box = get_login_fields(wait)
 
@@ -1232,18 +1232,8 @@ def run_automation(username, password, maxa, folder_path):
             pass
 
 
-# =========================================================
-# GUI
-# =========================================================
-
-def browse_folder(folder_var):
-    folder = filedialog.askdirectory(title="Chọn folder chứa file PDF")
-
-    if folder:
-        folder_var.set(folder)
-
-
 def start_automation_thread(username, password, maxa, folder_path):
+    """Start automation in a background thread."""
     if not all([username, password, maxa, folder_path]):
         messagebox.showwarning(
             "Thiếu thông tin",
@@ -1258,69 +1248,3 @@ def start_automation_thread(username, password, maxa, folder_path):
     )
 
     automation_thread.start()
-
-
-def create_gui():
-    root = tk.Tk()
-    root.title("Tool Tự Động Duyệt Vận Hành - Đắk Lắk")
-
-    frame = ttk.Frame(root, padding="20")
-    frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-    ttk.Label(frame, text="Username:").grid(column=0, row=0, sticky=tk.W, pady=5)
-
-    username_entry = ttk.Entry(frame, width=45)
-    username_entry.grid(column=1, row=0, sticky=(tk.W, tk.E), columnspan=2)
-
-    ttk.Label(frame, text="Password:").grid(column=0, row=1, sticky=tk.W, pady=5)
-
-    password_entry = ttk.Entry(frame, show="*", width=45)
-    password_entry.grid(column=1, row=1, sticky=(tk.W, tk.E), columnspan=2)
-
-    ttk.Label(frame, text="Mã xã/phường:").grid(column=0, row=2, sticky=tk.W, pady=5)
-
-    maxa_entry = ttk.Entry(frame, width=45)
-    maxa_entry.grid(column=1, row=2, sticky=(tk.W, tk.E), columnspan=2)
-
-    ttk.Label(frame, text="Folder PDF:").grid(column=0, row=3, sticky=tk.W, pady=5)
-
-    folder_var = tk.StringVar()
-
-    folder_entry = ttk.Entry(frame, textvariable=folder_var, width=45)
-    folder_entry.grid(column=1, row=3, sticky=(tk.W, tk.E))
-
-    btn_browse = ttk.Button(
-        frame,
-        text="Chọn folder",
-        command=lambda: browse_folder(folder_var),
-    )
-
-    btn_browse.grid(column=2, row=3, padx=5)
-
-    start_button = ttk.Button(
-        frame,
-        text="Bắt đầu",
-        command=lambda: start_automation_thread(
-            username_entry.get().strip(),
-            password_entry.get().strip(),
-            maxa_entry.get().strip(),
-            folder_var.get().strip(),
-        ),
-    )
-
-    start_button.grid(column=0, row=4, columnspan=3, pady=20)
-
-    ttk.Label(
-        frame,
-        text="URL cố định: https://dla.mplis.gov.vn/dc/ThuThapThongTin",
-    ).grid(column=0, row=5, columnspan=3, sticky=tk.W, pady=5)
-
-    root.columnconfigure(0, weight=1)
-    root.rowconfigure(0, weight=1)
-    frame.columnconfigure(1, weight=1)
-
-    root.mainloop()
-
-
-if __name__ == "__main__":
-    create_gui()

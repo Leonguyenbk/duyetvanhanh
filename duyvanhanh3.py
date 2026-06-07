@@ -453,85 +453,65 @@ def get_active_frm_thua_dat(driver, timeout=20):
 
     return frm_thua_dat
 
-def scroll_modal_thuthap_to_bottom(driver, timeout=20):
+def scroll_deep_to_bottom(driver, root):
     """
-    Cuộn modal #mdlThuThapThongTinChiTiet-* và các vùng con xuống đáy
-    để hiện nút Lưu #btnSave-*.
+    Cuộn root và toàn bộ div con có scrollbar xuống đáy.
+    Dùng cho #vModuleThuThapThongTinChiTiet.
     """
-    modal = find_visible_element(
-        driver,
-        "div[id^='mdlThuThapThongTinChiTiet-']",
-        timeout=timeout,
-    )
-
     driver.execute_script("""
-        const modal = arguments[0];
+        const root = arguments[0];
 
-        function scrollToBottom(el) {
+        function scrollOne(el) {
             try {
-                if (el && el.scrollHeight > el.clientHeight) {
+                if (el.scrollHeight > el.clientHeight) {
                     el.scrollTop = el.scrollHeight;
                 }
             } catch(e) {}
         }
 
-        // Cuộn modal chính
-        scrollToBottom(modal);
+        scrollOne(root);
 
-        // Cuộn các vùng hay có scrollbar
-        const selectors = [
-            '.modal-body',
-            '.modal-content',
-            '#vModuleThuThapThongTinChiTiet',
-            '[id^="vModuleThuThapThongTinChiTiet"]',
-            '[id^="frmThuaDat-"]'
-        ];
+        const all = root.querySelectorAll('*');
+        all.forEach(el => scrollOne(el));
 
-        selectors.forEach(sel => {
-            modal.querySelectorAll(sel).forEach(el => scrollToBottom(el));
-        });
+        try {
+            root.scrollIntoView({block: 'end', inline: 'nearest'});
+        } catch(e) {}
+    """, root)
 
-        // Cuộn toàn bộ con có scrollbar
-        modal.querySelectorAll('*').forEach(el => scrollToBottom(el));
-
-        // Đẩy modal vào cuối viewport
-        modal.scrollIntoView({block: 'end', inline: 'nearest'});
-    """, modal)
-
-    time.sleep(0.3)
-
-    return modal
 
 def bam_nut_luu_thu_thap_chi_tiet(driver, timeout=20):
     """
-    Bấm nút Lưu #btnSave-* trong modal #mdlThuThapThongTinChiTiet-*.
-    Có cuộn modal cha, modal-body, module và các vùng con.
+    Tìm và bấm nút Lưu dạng #btnSave-* trong #vModuleThuThapThongTinChiTiet.
+    Có cuộn xuống đáy và nhiều cách bấm dự phòng.
     """
 
     wait = WebDriverWait(driver, timeout)
 
+    module = get_active_thuthap_module(driver, timeout=timeout)
+
+    # Cuộn xuống đáy nhiều lần vì modal có thể có scroll lồng nhau
+    for _ in range(8):
+        scroll_deep_to_bottom(driver, module)
+        time.sleep(0.2)
+
     btn_save = None
 
-    for lan in range(10):
-        print(f"🔽 Cuộn tìm nút Lưu lần {lan + 1}")
+    selectors = [
+        "#vModuleThuThapThongTinChiTiet button[id^='btnSave-']",
+        "#vModuleThuThapThongTinChiTiet a[id^='btnSave-']",
+        "button[id^='btnSave-']",
+        "a[id^='btnSave-']",
+        "#btnSave-afd9676c-6964-4386-8b40-9a9ae7d8490a",
+    ]
 
-        modal = scroll_modal_thuthap_to_bottom(driver, timeout=timeout)
-
-        selectors = [
-            "button[id^='btnSave-']",
-            "a[id^='btnSave-']",
-            "#vModuleThuThapThongTinChiTiet button[id^='btnSave-']",
-            "#vModuleThuThapThongTinChiTiet a[id^='btnSave-']",
-            "button.btn-green",
-            "a.btn-green",
-        ]
-
-        for css in selectors:
-            buttons = modal.find_elements(By.CSS_SELECTOR, css)
+    for css in selectors:
+        try:
+            buttons = driver.find_elements(By.CSS_SELECTOR, css)
 
             for btn in buttons:
                 try:
-                    if btn.is_displayed() and btn.is_enabled():
+                    if btn.is_displayed():
                         btn_save = btn
                         print(f"✅ Tìm thấy nút Lưu bằng selector: {css}")
                         break
@@ -541,36 +521,31 @@ def bam_nut_luu_thu_thap_chi_tiet(driver, timeout=20):
             if btn_save:
                 break
 
-        if btn_save:
-            break
-
-        time.sleep(0.3)
+        except:
+            continue
 
     if btn_save is None:
-        raise Exception("Không tìm thấy nút Lưu #btnSave-* trong modal thu thập thông tin chi tiết")
+        raise Exception("Không tìm thấy nút Lưu #btnSave-* đang hiển thị")
 
-    driver.execute_script("""
-        const btn = arguments[0];
-
-        btn.scrollIntoView({block: 'center', inline: 'nearest'});
-
-        document.querySelectorAll('div.jquery-loading-modal_bg').forEach(e => e.remove());
-        document.querySelectorAll('.modal-backdrop').forEach(e => {
-            if (!e.classList.contains('show')) e.remove();
-        });
-    """, btn_save)
-
+    # Cuộn đúng vào nút
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});",
+        btn_save
+    )
     time.sleep(0.4)
 
-    # Cách 1: JS click trực tiếp
+    # Dọn overlay/loading còn sót
     try:
-        driver.execute_script("arguments[0].click();", btn_save)
-        print("💾 Đã bấm nút Lưu bằng JS click")
-        return True
-    except Exception as e:
-        print(f"⚠ JS click nút Lưu thất bại: {e}")
+        driver.execute_script("""
+            document.querySelectorAll('div.jquery-loading-modal_bg')
+                    .forEach(e => e.remove());
+            document.querySelectorAll('.modal-backdrop')
+                    .forEach(e => e.remove());
+        """)
+    except:
+        pass
 
-    # Cách 2: ActionChains
+    # Cách 1: click thường bằng ActionChains
     try:
         ActionChains(driver).move_to_element(btn_save).pause(0.2).click().perform()
         print("💾 Đã bấm nút Lưu bằng ActionChains")
@@ -578,25 +553,31 @@ def bam_nut_luu_thu_thap_chi_tiet(driver, timeout=20):
     except Exception as e:
         print(f"⚠ ActionChains click nút Lưu thất bại: {e}")
 
-    # Cách 3: jQuery trigger
+    # Cách 2: JS click
+    try:
+        driver.execute_script("arguments[0].click();", btn_save)
+        print("💾 Đã bấm nút Lưu bằng JS click")
+        return True
+    except Exception as e:
+        print(f"⚠ JS click nút Lưu thất bại: {e}")
+
+    # Cách 3: trigger native MouseEvent
     try:
         driver.execute_script("""
             const btn = arguments[0];
-            if (window.jQuery) {
-                jQuery(btn).trigger('click');
-            } else {
-                btn.dispatchEvent(new MouseEvent('click', {
-                    bubbles: true,
-                    cancelable: true,
-                    view: window
-                }));
-            }
+            const evt = new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                view: window
+            });
+            btn.dispatchEvent(evt);
         """, btn_save)
 
-        print("💾 Đã bấm nút Lưu bằng jQuery/MouseEvent")
+        print("💾 Đã bấm nút Lưu bằng MouseEvent")
         return True
+
     except Exception as e:
-        print(f"⚠ jQuery/MouseEvent click nút Lưu thất bại: {e}")
+        print(f"⚠ MouseEvent click nút Lưu thất bại: {e}")
 
     raise Exception("Không thể bấm nút Lưu #btnSave-*")
 

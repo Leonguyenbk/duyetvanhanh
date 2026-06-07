@@ -1,9 +1,9 @@
 import os
 import re
 
-folder = r"F:\My Drive\Congviec\TOKSNV\KH2959\NHOM1\BUONMATHUOT\NHÓM-1-2\NHÓM-1-2\SON"  # sửa đường dẫn folder
+folder = r"G:\My Drive\Congviec\TOKSNV\KH2959\NHOM1\TANAN\DK Tan An.daky"  # sửa đường dẫn folder
 
-prefix = "CHUACOGIAY_24133_SON"
+prefix = "CHUACOGIAY_24163"
 
 files = [f for f in os.listdir(folder) if f.lower().endswith(".pdf")]
 

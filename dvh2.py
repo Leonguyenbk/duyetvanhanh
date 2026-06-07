@@ -95,8 +95,6 @@ def wait_query_done(driver, timeout=30, ajax_wait=5):
         except:
             break
 
-        time.sleep(0.1)
-
     if not saw_ajax:
         wait_loading_mask(driver)
         return
@@ -108,8 +106,6 @@ def wait_query_done(driver, timeout=30, ajax_wait=5):
                 break
         except:
             break
-
-        time.sleep(0.1)
 
     wait_loading_mask(driver)
 
@@ -130,6 +126,80 @@ def find_visible_element(driver, css_selector, timeout=20):
         return False
 
     return wait.until(_find)
+
+
+def dong_sach_modal_va_overlay(driver):
+    try:
+        driver.execute_script("""
+            document.querySelectorAll('.modal.in, .modal.show').forEach(m => {
+                try {
+                    if (window.jQuery) {
+                        jQuery(m).modal('hide');
+                    }
+                } catch(e) {}
+
+                m.classList.remove('in');
+                m.classList.remove('show');
+                m.style.display = 'none';
+                m.setAttribute('aria-hidden', 'true');
+            });
+
+            document.querySelectorAll('.modal-backdrop, div.jquery-loading-modal_bg, .popover')
+                .forEach(e => e.remove());
+
+            document.body.classList.remove('modal-open');
+            document.body.style.paddingRight = '';
+            document.body.style.overflow = '';
+        """)
+    except Exception as e:
+        print("⚠ Không dọn được modal/overlay:", e)
+
+
+# =========================================================
+# CHỌN PHƯỜNG/XÃ + RELOAD
+# =========================================================
+
+def chon_phuong_xa(driver, maxa, timeout=30):
+    wait = WebDriverWait(driver, timeout)
+
+    option_xpath = f"//select[@id='ddlPhuongXa']/option[@value='{maxa}']"
+
+    option_element = wait.until(
+        EC.element_to_be_clickable((By.XPATH, option_xpath))
+    )
+
+    option_element.click()
+
+    print(f"✅ Đã chọn phường/xã: {maxa}")
+
+    wait_query_done(driver, timeout=30, ajax_wait=2)
+
+
+def reload_lai_trang_va_tim_lai_gcn(driver, maxa, ma_gcn, timeout=40):
+    print("🔄 Reload lại trang sau khi xóa thửa và lưu...")
+
+    driver.get(BASE_URL)
+
+    wait_query_done(driver, timeout=40, ajax_wait=3)
+
+    chon_phuong_xa(driver, maxa, timeout=timeout)
+
+    nhap_ma_gcn_va_tim_kiem(driver, ma_gcn, timeout=timeout)
+
+    ul = lay_ul_gcn_dau_tien(driver, timeout=timeout)
+
+    if ul is None:
+        raise Exception(f"Sau khi reload không tìm thấy lại GCN: {ma_gcn}")
+
+    if gcn_da_co_dau_xanh(ul):
+        print(f"✅ Sau khi reload, GCN {ma_gcn} đã có dấu xanh")
+        return ul
+
+    chon_ul_gcn(driver, ul, timeout=15)
+
+    print(f"✅ Đã reload, chọn xã và tìm lại GCN: {ma_gcn}")
+
+    return ul
 
 
 # =========================================================
@@ -254,52 +324,6 @@ def handle_jconfirm_popups(driver, timeout_first=20, timeout_second=5):
     return True
 
 
-def handle_confirm_delete_popup(driver, timeout=5):
-    try:
-        popup = WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located(
-                (
-                    By.CSS_SELECTOR,
-                    "div.jconfirm.jconfirm-vbdlis-theme.jconfirm-open",
-                )
-            )
-        )
-
-        btn_ok = popup.find_element(
-            By.XPATH,
-            ".//div[contains(@class,'jconfirm-buttons')]//button["
-            "contains(normalize-space(.),'Đồng ý') "
-            "or contains(normalize-space(.),'OK') "
-            "or contains(normalize-space(.),'Có') "
-            "or contains(@class,'btn-orange') "
-            "or contains(@class,'btn-red')"
-            "]",
-        )
-
-        driver.execute_script("arguments[0].click();", btn_ok)
-
-        print("✅ Đã xác nhận popup xóa")
-
-        WebDriverWait(driver, 10).until(
-            EC.invisibility_of_element_located(
-                (
-                    By.CSS_SELECTOR,
-                    "div.jconfirm.jconfirm-vbdlis-theme.jconfirm-open",
-                )
-            )
-        )
-
-        return True
-
-    except TimeoutException:
-        print("ℹ Không thấy popup xác nhận xóa")
-        return False
-
-    except Exception as e:
-        print(f"⚠ Lỗi xử lý popup xóa: {e}")
-        return False
-
-
 def handle_popup_orange_after_save_dangky(driver, timeout=8):
     POPUP_CSS = "body > div.jconfirm.jconfirm-vbdlis-theme.jconfirm-open"
     BTN_ORANGE_CSS = (
@@ -329,8 +353,6 @@ def handle_popup_orange_after_save_dangky(driver, timeout=8):
 
         except:
             pass
-
-        time.sleep(0.15)
 
     print("ℹ Không thấy popup nút cam sau #btnSaveDangKy")
     return False
@@ -388,6 +410,7 @@ def handle_popup_thua_dat_ton_tai(driver, timeout=1):
 
     except TimeoutException:
         return False, [], None
+
     except Exception as e:
         print(f"⚠ Lỗi đọc popup thửa tồn tại: {e}")
         return False, [], None
@@ -416,6 +439,7 @@ def get_active_thuthap_module(driver, timeout=20):
 
         for css in selectors:
             els = d.find_elements(By.CSS_SELECTOR, css)
+
             for el in els:
                 try:
                     if el.is_displayed():
@@ -435,7 +459,8 @@ def get_active_frm_thua_dat(driver, timeout=20):
 
     def _find(d):
         fieldsets = module.find_elements(
-            By.CSS_SELECTOR, "div[id^='frmThuaDat-']"
+            By.CSS_SELECTOR,
+            "div[id^='frmThuaDat-']"
         )
 
         for fieldset in fieldsets:
@@ -453,152 +478,119 @@ def get_active_frm_thua_dat(driver, timeout=20):
 
     return frm_thua_dat
 
-def scroll_modal_thuthap_to_bottom(driver, timeout=20):
-    """
-    Cuộn modal #mdlThuThapThongTinChiTiet-* và các vùng con xuống đáy
-    để hiện nút Lưu #btnSave-*.
-    """
-    modal = find_visible_element(
-        driver,
-        "div[id^='mdlThuThapThongTinChiTiet-']",
-        timeout=timeout,
-    )
 
+def scroll_deep_to_bottom(driver, root):
     driver.execute_script("""
-        const modal = arguments[0];
+        const root = arguments[0];
 
-        function scrollToBottom(el) {
+        function scrollOne(el) {
             try {
-                if (el && el.scrollHeight > el.clientHeight) {
+                if (el.scrollHeight > el.clientHeight) {
                     el.scrollTop = el.scrollHeight;
                 }
             } catch(e) {}
         }
 
-        // Cuộn modal chính
-        scrollToBottom(modal);
+        scrollOne(root);
 
-        // Cuộn các vùng hay có scrollbar
-        const selectors = [
-            '.modal-body',
-            '.modal-content',
-            '#vModuleThuThapThongTinChiTiet',
-            '[id^="vModuleThuThapThongTinChiTiet"]',
-            '[id^="frmThuaDat-"]'
-        ];
+        const all = root.querySelectorAll('*');
+        all.forEach(el => scrollOne(el));
 
-        selectors.forEach(sel => {
-            modal.querySelectorAll(sel).forEach(el => scrollToBottom(el));
-        });
+        try {
+            root.scrollIntoView({block: 'end', inline: 'nearest'});
+        } catch(e) {}
+    """, root)
 
-        // Cuộn toàn bộ con có scrollbar
-        modal.querySelectorAll('*').forEach(el => scrollToBottom(el));
-
-        // Đẩy modal vào cuối viewport
-        modal.scrollIntoView({block: 'end', inline: 'nearest'});
-    """, modal)
-
-    time.sleep(0.3)
-
-    return modal
 
 def bam_nut_luu_thu_thap_chi_tiet(driver, timeout=20):
-    """
-    Bấm nút Lưu #btnSave-* trong modal #mdlThuThapThongTinChiTiet-*.
-    Có cuộn modal cha, modal-body, module và các vùng con.
-    """
-
     wait = WebDriverWait(driver, timeout)
 
-    btn_save = None
-
-    for lan in range(10):
-        print(f"🔽 Cuộn tìm nút Lưu lần {lan + 1}")
-
-        modal = scroll_modal_thuthap_to_bottom(driver, timeout=timeout)
+    def _find_save_button(d):
+        modal = tim_modal_thu_thap_chi_tiet(d, timeout=timeout)
 
         selectors = [
+            ".panel-footer .btn.btn-green[id^='btnSave-']",
+            ".panel-footer button[id^='btnSave-']",
+            ".panel-footer a[id^='btnSave-']",
             "button[id^='btnSave-']",
             "a[id^='btnSave-']",
-            "#vModuleThuThapThongTinChiTiet button[id^='btnSave-']",
-            "#vModuleThuThapThongTinChiTiet a[id^='btnSave-']",
-            "button.btn-green",
-            "a.btn-green",
         ]
 
         for css in selectors:
-            buttons = modal.find_elements(By.CSS_SELECTOR, css)
+            try:
+                for btn in modal.find_elements(By.CSS_SELECTOR, css):
+                    disabled = btn.get_attribute("disabled")
+                    aria_disabled = btn.get_attribute("aria-disabled")
 
-            for btn in buttons:
-                try:
-                    if btn.is_displayed() and btn.is_enabled():
-                        btn_save = btn
-                        print(f"✅ Tìm thấy nút Lưu bằng selector: {css}")
-                        break
-                except:
-                    pass
+                    if (
+                        btn.is_displayed()
+                        and btn.is_enabled()
+                        and disabled is None
+                        and aria_disabled != "true"
+                    ):
+                        btn_id = btn.get_attribute("id")
+                        print(f"✅ Tìm thấy nút Lưu {btn_id} bằng selector: {css}")
+                        return btn
+            except:
+                pass
 
-            if btn_save:
-                break
+        return False
 
-        if btn_save:
-            break
+    wait_query_done(driver, timeout=25, ajax_wait=1)
 
-        time.sleep(0.3)
+    modal = tim_modal_thu_thap_chi_tiet(driver, timeout=timeout)
 
-    if btn_save is None:
-        raise Exception("Không tìm thấy nút Lưu #btnSave-* trong modal thu thập thông tin chi tiết")
-
-    driver.execute_script("""
-        const btn = arguments[0];
-
-        btn.scrollIntoView({block: 'center', inline: 'nearest'});
-
-        document.querySelectorAll('div.jquery-loading-modal_bg').forEach(e => e.remove());
-        document.querySelectorAll('.modal-backdrop').forEach(e => {
-            if (!e.classList.contains('show')) e.remove();
-        });
-    """, btn_save)
-
-    time.sleep(0.4)
-
-    # Cách 1: JS click trực tiếp
     try:
-        driver.execute_script("arguments[0].click();", btn_save)
-        print("💾 Đã bấm nút Lưu bằng JS click")
-        return True
-    except Exception as e:
-        print(f"⚠ JS click nút Lưu thất bại: {e}")
+        scroll_deep_to_bottom(driver, modal)
+    except:
+        pass
 
-    # Cách 2: ActionChains
+    btn_save = wait.until(_find_save_button)
+
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});",
+        btn_save,
+    )
+
+    click_errors = []
+
     try:
         ActionChains(driver).move_to_element(btn_save).pause(0.2).click().perform()
-        print("💾 Đã bấm nút Lưu bằng ActionChains")
+        print("💾 Đã bấm nút Lưu trong panel-footer bằng ActionChains")
         return True
     except Exception as e:
+        click_errors.append(f"ActionChains: {e}")
         print(f"⚠ ActionChains click nút Lưu thất bại: {e}")
 
-    # Cách 3: jQuery trigger
     try:
-        driver.execute_script("""
-            const btn = arguments[0];
-            if (window.jQuery) {
-                jQuery(btn).trigger('click');
-            } else {
-                btn.dispatchEvent(new MouseEvent('click', {
-                    bubbles: true,
-                    cancelable: true,
-                    view: window
-                }));
-            }
-        """, btn_save)
-
-        print("💾 Đã bấm nút Lưu bằng jQuery/MouseEvent")
+        btn_save = wait.until(_find_save_button)
+        driver.execute_script("arguments[0].click();", btn_save)
+        print("💾 Đã bấm nút Lưu trong panel-footer bằng JS click")
         return True
     except Exception as e:
-        print(f"⚠ jQuery/MouseEvent click nút Lưu thất bại: {e}")
+        click_errors.append(f"JS click: {e}")
+        print(f"⚠ JS click nút Lưu thất bại: {e}")
 
-    raise Exception("Không thể bấm nút Lưu #btnSave-*")
+    try:
+        btn_save = wait.until(_find_save_button)
+        driver.execute_script("""
+            const btn = arguments[0];
+            btn.focus();
+            btn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+            btn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+            btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+        """, btn_save)
+
+        print("💾 Đã bấm nút Lưu trong panel-footer bằng MouseEvent")
+        return True
+    except Exception as e:
+        click_errors.append(f"MouseEvent: {e}")
+        print(f"⚠ MouseEvent click nút Lưu thất bại: {e}")
+
+    raise Exception(
+        "Không thể bấm nút Lưu trong panel-footer; "
+        + " | ".join(click_errors)
+    )
 
 
 # =========================================================
@@ -631,6 +623,7 @@ def chon_thua_dat_trung_trong_modal(driver, modal, so_thua, so_to, timeout=20):
     for idx, item in enumerate(item_forms):
         try:
             wrappers = item.find_elements(By.CSS_SELECTOR, "div.string-wrapper")
+
             if not wrappers:
                 continue
 
@@ -641,15 +634,19 @@ def chon_thua_dat_trung_trong_modal(driver, modal, so_thua, so_to, timeout=20):
 
             print(f"🔎 [{idx}] Kiểm tra: {text[:200]}")
 
-            co_so_thua = bool(re.search(
-                rf"Số\s+thứ\s+tự\s+thửa\s*:\s*{re.escape(str(so_thua))}\b",
-                text
-            ))
+            co_so_thua = bool(
+                re.search(
+                    rf"Số\s+thứ\s+tự\s+thửa\s*:\s*{re.escape(str(so_thua))}\b",
+                    text,
+                )
+            )
 
-            co_so_to = bool(re.search(
-                rf"Số\s+hiệu\s+tờ\s+bản\s+đồ\s*:\s*{re.escape(str(so_to))}\b",
-                text
-            ))
+            co_so_to = bool(
+                re.search(
+                    rf"Số\s+hiệu\s+tờ\s+bản\s+đồ\s*:\s*{re.escape(str(so_to))}\b",
+                    text,
+                )
+            )
 
             if co_so_thua and co_so_to:
                 print(f"✅ Tìm thấy: thửa={so_thua}, tờ={so_to} tại index [{idx}]")
@@ -670,7 +667,7 @@ def chon_thua_dat_trung_trong_modal(driver, modal, so_thua, so_to, timeout=20):
                 if wrappers:
                     print(f"  [{i}] {wrappers[0].text[:200]}")
                 else:
-                    print(f"  [{i}] (không có string-wrapper)")
+                    print(f"  [{i}] Không có string-wrapper")
             except Exception as e:
                 print(f"  [{i}] Lỗi: {e}")
 
@@ -680,26 +677,27 @@ def chon_thua_dat_trung_trong_modal(driver, modal, so_thua, so_to, timeout=20):
         )
 
     driver.execute_script(
-        "arguments[0].scrollIntoView({block: 'center'});", target_form
+        "arguments[0].scrollIntoView({block: 'center'});",
+        target_form,
     )
-
-    time.sleep(0.3)
 
     for attempt in range(10):
         driver.execute_script("arguments[0].click();", target_form)
-        time.sleep(0.35)
 
         class_name = target_form.get_attribute("class") or ""
 
         if "item-selected" in class_name:
-            print(f"✅ Đã select thửa={so_thua}, tờ={so_to} sau {attempt + 1} lần click")
+            print(
+                f"✅ Đã select thửa={so_thua}, tờ={so_to} "
+                f"sau {attempt + 1} lần click"
+            )
             return target_form
 
         try:
             wrappers = target_form.find_elements(By.CSS_SELECTOR, "div.string-wrapper")
+
             if wrappers:
                 driver.execute_script("arguments[0].click();", wrappers[0])
-                time.sleep(0.25)
 
                 class_name = target_form.get_attribute("class") or ""
 
@@ -710,121 +708,67 @@ def chon_thua_dat_trung_trong_modal(driver, modal, so_thua, so_to, timeout=20):
             pass
 
     raise Exception(
-        f"Đã click 10 lần nhưng thửa={so_thua}, tờ={so_to} chưa có class item-selected"
+        f"Đã click 10 lần nhưng thửa={so_thua}, tờ={so_to} "
+        f"chưa có class item-selected"
     )
 
 
 # =========================================================
-# XÓA THỬA TRÙNG - CHỈ 1 HÀM DUY NHẤT
+# XÓA THỬA TRÙNG
 # =========================================================
 
 def xoa_thua_dat_trung_trong_modal(driver, modal, so_thua, so_to, timeout=20):
-    """
-    Chọn đúng thửa trùng rồi xóa.
-    Ưu tiên Ctrl + Delete vì nút xóa chỉ hiện khi hover.
-    Nếu Ctrl + Delete không ra popup thì mới thử hover/click nút xóa.
-    """
-
-    target_form = chon_thua_dat_trung_trong_modal(
-        driver,
-        modal,
-        so_thua,
-        so_to,
-        timeout=timeout,
-    )
+    try:
+        target_form = chon_thua_dat_trung_trong_modal(
+            driver,
+            modal,
+            so_thua,
+            so_to,
+            timeout=timeout,
+        )
+    except Exception as e:
+        print(f"⚠ Không tìm được thửa cần xóa: {e}")
+        return False
 
     print(f"👉 Chuẩn bị xóa thửa={so_thua}, tờ={so_to}")
 
     driver.execute_script(
         "arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});",
-        target_form
+        target_form,
     )
-
-    time.sleep(0.3)
 
     try:
         driver.execute_script("arguments[0].click();", target_form)
-        time.sleep(0.2)
 
         wrappers = target_form.find_elements(By.CSS_SELECTOR, "div.string-wrapper")
+
         if wrappers:
             driver.execute_script("arguments[0].click();", wrappers[0])
-            time.sleep(0.2)
 
     except Exception as e:
         print(f"⚠ Không click focus được form: {e}")
 
-    # Cách 1: Ctrl + Delete
     try:
-        ActionChains(driver)\
-            .move_to_element(target_form)\
-            .click()\
-            .key_down(Keys.CONTROL)\
-            .send_keys(Keys.DELETE)\
-            .key_up(Keys.CONTROL)\
+        ActionChains(driver) \
+            .move_to_element(target_form) \
+            .click() \
+            .key_down(Keys.CONTROL) \
+            .send_keys(Keys.DELETE) \
+            .key_up(Keys.CONTROL) \
             .perform()
 
         print(f"⌨ Đã gửi Ctrl + Delete cho thửa={so_thua}, tờ={so_to}")
 
-        if handle_confirm_delete_popup(driver, timeout=5):
-            time.sleep(0.7)
-            return True
+        handle_jconfirm_popups(driver, timeout_first=3, timeout_second=1)
+
+        wait_query_done(driver, timeout=25, ajax_wait=1)
+
+        return True
 
     except Exception as e:
         print(f"⚠ Ctrl + Delete thất bại: {e}")
-
-    # Cách 2: Hover để hiện nút xóa rồi click
-    try:
-        ActionChains(driver).move_to_element(target_form).pause(0.5).perform()
-
-        print("🖱 Đã hover vào form thửa đất để hiện nút xóa")
-
-        btn_delete = target_form.find_element(
-            By.CSS_SELECTOR,
-            "div.form-wrapper > div.group-action > a.button-action.btnDelete, "
-            "div.form-wrapper div.group-action a.btnDelete, "
-            "a.button-action.btnDelete"
-        )
-
-        ActionChains(driver)\
-            .move_to_element(btn_delete)\
-            .pause(0.2)\
-            .click()\
-            .perform()
-
-        print(f"🗑 Đã bấm nút xóa bằng hover/click cho thửa={so_thua}, tờ={so_to}")
-
-        if handle_confirm_delete_popup(driver, timeout=5):
-            time.sleep(0.7)
-            return True
-
-    except Exception as e:
-        print(f"⚠ Hover/click nút xóa thất bại: {e}")
-
-    # Cách 3: ép hiện nút rồi trigger click
-    try:
-        driver.execute_script("""
-            const form = arguments[0];
-            const btn = form.querySelector('a.btnDelete');
-
-            if (btn) {
-                btn.style.display = 'inline-block';
-                btn.style.visibility = 'visible';
-                btn.style.opacity = '1';
-                btn.click();
-            }
-        """, target_form)
-
-        print(f"🗑 Đã trigger JS nút xóa cho thửa={so_thua}, tờ={so_to}")
-
-        if handle_confirm_delete_popup(driver, timeout=5):
-            time.sleep(0.7)
-            return True
-
-    except Exception as e:
-        print(f"⚠ JS trigger nút xóa thất bại: {e}")
-
-    raise Exception(f"Không xóa được thửa={so_thua}, tờ={so_to}")
+        print(f"⚠ Không xóa được thửa={so_thua}, tờ={so_to}; vẫn tiếp tục")
+        return False
 
 
 # =========================================================
@@ -860,7 +804,7 @@ def xoa_tat_ca_thua_trung_va_luu(driver, ds_thua, timeout=20):
     for so_thua, so_to in ds_thua:
         print(f"👉 Đang xử lý xóa thửa={so_thua}, tờ={so_to}")
 
-        xoa_thua_dat_trung_trong_modal(
+        deleted = xoa_thua_dat_trung_trong_modal(
             driver,
             None,
             so_thua,
@@ -868,8 +812,18 @@ def xoa_tat_ca_thua_trung_va_luu(driver, ds_thua, timeout=20):
             timeout=timeout,
         )
 
-        thua_da_xoa.append(f"{so_thua}({so_to})")
-        print(f"✅ Đã xóa thửa={so_thua}, tờ={so_to}")
+        if deleted:
+            thua_da_xoa.append(f"{so_thua}({so_to})")
+            print(f"✅ Đã xóa thửa={so_thua}, tờ={so_to}")
+        else:
+            print(
+                f"⚠ Không xóa được thửa={so_thua}, tờ={so_to} "
+                "nhưng vẫn tiếp tục bấm Lưu"
+            )
+
+        wait_query_done(driver, timeout=25, ajax_wait=1)
+
+    wait_query_done(driver, timeout=25, ajax_wait=1)
 
     bam_nut_luu_thu_thap_chi_tiet(driver, timeout=timeout)
 
@@ -889,6 +843,8 @@ def xoa_tat_ca_thua_trung_va_luu(driver, ds_thua, timeout=20):
 def nhap_ma_gcn_va_tim_kiem(driver, ma_gcn, timeout=20):
     wait = WebDriverWait(driver, timeout)
 
+    dong_sach_modal_va_overlay(driver)
+
     input_mahs = wait.until(
         EC.element_to_be_clickable(
             (
@@ -898,7 +854,11 @@ def nhap_ma_gcn_va_tim_kiem(driver, ma_gcn, timeout=20):
         )
     )
 
-    input_mahs.clear()
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", input_mahs)
+
+    input_mahs.click()
+    input_mahs.send_keys(Keys.CONTROL, "a")
+    input_mahs.send_keys(Keys.DELETE)
     input_mahs.send_keys(ma_gcn)
 
     print(f"👉 Đã nhập mã GCN: {ma_gcn}")
@@ -925,8 +885,6 @@ def lay_ul_gcn_dau_tien(driver, timeout=20):
     lst_gcn = wait.until(
         lambda d: wp_ketqua.find_element(By.ID, "lstGiayChungNhan")
     )
-
-    time.sleep(0.5)
 
     uls = lst_gcn.find_elements(
         By.CSS_SELECTOR,
@@ -983,7 +941,7 @@ def bam_kiem_tra_dang_ky(driver, ma_gcn, timeout=15):
     wait_query_done(driver, timeout=20, ajax_wait=2)
 
 
-def kiem_tra_va_xu_ly_thua_trung(driver, ma_gcn, timeout=20, max_lap=5):
+def kiem_tra_va_xu_ly_thua_trung(driver, ma_gcn, maxa, timeout=20, max_lap=5):
     tat_ca_thua_da_xoa = []
 
     for lan in range(1, max_lap + 1):
@@ -1004,7 +962,18 @@ def kiem_tra_va_xu_ly_thua_trung(driver, ma_gcn, timeout=20, max_lap=5):
 
             tat_ca_thua_da_xoa.extend(thua_da_xoa)
 
-            print(f"🔁 Đã xóa xong thửa trùng, sẽ kiểm tra lại GCN {ma_gcn}")
+            print(
+                f"🔁 Đã xóa xong thửa trùng cho GCN {ma_gcn}. "
+                "Sẽ reload lại trang rồi tìm lại GCN."
+            )
+
+            reload_lai_trang_va_tim_lai_gcn(
+                driver,
+                maxa=maxa,
+                ma_gcn=ma_gcn,
+                timeout=40,
+            )
+
             continue
 
         if co_popup and not ds_thua:
@@ -1089,7 +1058,7 @@ def duyet_vao_van_hanh(driver, ma_gcn, timeout=30):
 # XỬ LÝ 1 GCN
 # =========================================================
 
-def xu_ly_mot_gcn(driver, ten_file, ma_gcn):
+def xu_ly_mot_gcn(driver, ten_file, ma_gcn, maxa):
     try:
         nhap_ma_gcn_va_tim_kiem(driver, ma_gcn)
 
@@ -1111,13 +1080,26 @@ def xu_ly_mot_gcn(driver, ten_file, ma_gcn):
 
         chon_ul_gcn(driver, ul)
 
-        thua_da_xoa = kiem_tra_va_xu_ly_thua_trung(driver, ma_gcn)
+        thua_da_xoa = kiem_tra_va_xu_ly_thua_trung(
+            driver,
+            ma_gcn,
+            maxa=maxa,
+        )
+
+        ul_after = lay_ul_gcn_dau_tien(driver)
+
+        if ul_after is not None and gcn_da_co_dau_xanh(ul_after):
+            return {
+                "TrangThai": "Đã duyệt từ trước",
+                "ThuaDaXoa": ", ".join(thua_da_xoa),
+                "GhiChu": "Sau khi reload, GCN đã có dấu xanh",
+            }
 
         duyet_vao_van_hanh(driver, ma_gcn)
 
         if thua_da_xoa:
-            trang_thai = "Đã xóa thửa trùng và duyệt vận hành"
-            ghi_chu = "Đã xử lý thửa trùng trước khi duyệt"
+            trang_thai = "Đã xóa thửa trùng, reload lại trang và duyệt vận hành"
+            ghi_chu = "Đã xử lý thửa trùng, reload lại trang trước khi duyệt"
         else:
             trang_thai = "Đã duyệt vận hành"
             ghi_chu = "Không có thửa trùng"
@@ -1179,22 +1161,14 @@ def run_automation(username, password, maxa, folder_path):
             "Đăng nhập thành công! Nhấn OK để bắt đầu tự động hoá.",
         )
 
-        option_xpath = f"//select[@id='ddlPhuongXa']/option[@value='{maxa}']"
-
-        option_element = wait.until(
-            EC.element_to_be_clickable((By.XPATH, option_xpath))
-        )
-
-        option_element.click()
-
-        print(f"✅ Đã chọn phường/xã: {maxa}")
+        chon_phuong_xa(driver, maxa)
 
         for idx, (ten_file, ma_gcn) in enumerate(ds_files, start=1):
             print("=" * 80)
             print(f"FILE {idx}/{len(ds_files)}: {ten_file}")
             print(f"Mã GCN: {ma_gcn}")
 
-            ket_qua = xu_ly_mot_gcn(driver, ten_file, ma_gcn)
+            ket_qua = xu_ly_mot_gcn(driver, ten_file, ma_gcn, maxa)
 
             row = {
                 "STT": idx,
@@ -1212,7 +1186,7 @@ def run_automation(username, password, maxa, folder_path):
             print(f"🧾 Thửa đã xóa: {ket_qua['ThuaDaXoa']}")
             print(f"📝 Ghi chú: {ket_qua['GhiChu']}")
 
-            time.sleep(0.4)
+            dong_sach_modal_va_overlay(driver)
 
         messagebox.showinfo(
             "Hoàn tất",
