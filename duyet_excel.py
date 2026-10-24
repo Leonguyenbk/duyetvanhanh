@@ -60,9 +60,11 @@ ENDPOINTS = {
     ],
 }
 
-# bấm #btnSaveDangKy -> popup xác nhận -> bấm Đồng ý -> validate -> save
+# bấm #btnSaveDangKy -> popup xác nhận -> bấm Đồng ý -> validate -> (slider captcha) -> save
 EP_VALIDATE_DANG_KY = r"/dc/DangKyAjax/ValidateThongTinDangKy"
 EP_SAVE_DANG_KY = AJAX + r"SaveThongTinDangKy"
+EP_SLIDER_CHALLENGE = r"/dc/SliderCaptcha/Challenge"
+EP_SLIDER_VERIFY = r"/dc/SliderCaptcha/Verify"
 
 # Sau validate mà không thấy request Save trong khoảng này (và đang có popup chặn)
 # thì coi như không lưu được (vd: thửa đất đã được đăng ký)
@@ -110,32 +112,98 @@ class NetworkWatcher:
         self.order = 0
         # pause_check() True (vd đang hiện captcha) -> ngừng đếm timeout, chờ người dùng
         self.pause_check = pause_check
+        self.captcha_pending = False
+        self.captcha_challenge_id = None
+        self._checked_body_ids = set()
         self._last_beep = 0
         self._paused_total = 0
+
+    def dang_captcha(self):
+        dom_captcha = bool(self.pause_check and self.pause_check())
+        return self.captcha_pending or dom_captcha
 
     def tam_dung(self, dt):
         """
         Gọi mỗi vòng chờ với dt = thời gian vòng vừa rồi. Nếu đang captcha: nhắc người
         dùng, cộng dồn thời gian tạm dừng và trả về dt (để cộng vào hạn chờ); không thì 0.
         """
-        if not self.pause_check or not self.pause_check():
+        if not self.dang_captcha():
             self._paused_total = 0
+            self._last_beep = 0
             return 0
 
         self._paused_total += dt
 
         if self._paused_total > CAPTCHA_MAX_WAIT:
+            self.captcha_pending = False
             raise NetworkError(f"Captcha chưa được giải sau {CAPTCHA_MAX_WAIT}s")
 
-        if time.time() - self._last_beep > 10:
+        if time.time() - self._last_beep > 8:
             self._last_beep = time.time()
-            print("🧩 Đang hiện captcha -> hãy giải captcha trên Chrome, tool đang chờ...")
+            cid = f" (challengeId={self.captcha_challenge_id})" if self.captcha_challenge_id else ""
+            print(f"🧩 Đang hiện Captcha kéo puzzle{cid} -> hãy kéo giải trên Chrome, tool đang tạm dừng chờ...")
             try:
                 winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
             except Exception:
                 pass
 
         return dt
+
+    def _inspect_for_captcha(self, r):
+        """Theo dõi /dc/SliderCaptcha/Challenge và /dc/SliderCaptcha/Verify."""
+        if r["type"] not in self.XHR_TYPES or r["id"] in self._checked_body_ids:
+            return
+        self._checked_body_ids.add(r["id"])
+
+        url = r["url"] or ""
+        body = self._get_body(r)
+
+        if re.search(EP_SLIDER_CHALLENGE, url, re.I) or (
+            body and '"challengeId"' in body and '"piece"' in body and '"bg"' in body
+        ):
+            data = {}
+            if body:
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    pass
+            cid = data.get("challengeId")
+            self.captcha_pending = True
+            self.captcha_challenge_id = cid
+            self._last_beep = 0
+            self._log("SLIDER_CAPTCHA", [f"Challenge challengeId={cid} {r['method']} {url}"])
+            print(f"🧩 [SliderCaptcha] Hiện bảng kéo puzzle (challengeId={cid}) -> đang tạm dừng chờ bạn kéo...")
+            return
+
+        if re.search(EP_SLIDER_VERIFY, url, re.I):
+            data = {}
+            if body:
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    pass
+            if data.get("verified") is True:
+                self.captcha_pending = False
+                self.captcha_challenge_id = None
+                self._log("SLIDER_CAPTCHA", [f"Verify OK (recaptchaResponse={data.get('recaptchaResponse')})"])
+                print("✅ [SliderCaptcha] Giải puzzle thành công! Tiếp tục lưu đăng ký...")
+            else:
+                self.captcha_pending = True
+                self._last_beep = 0
+                self._log("SLIDER_CAPTCHA", [f"Verify FAILED: {body}"])
+                print("⚠ [SliderCaptcha] Kéo chưa khớp, hãy kéo lại trên Chrome...")
+            return
+
+        if self.captcha_pending and r["status"] and 200 <= r["status"] < 300:
+            if any(ep in url for ep in (
+                "GetThuThapThongTinGiayChungNhan",
+                "ValidateThuThapThongTin",
+                "ConvertThongTinDangKy",
+                "ValidateThongTinDangKy",
+                "SaveThongTinDangKy",
+            )):
+                self.captcha_pending = False
+                self.captcha_challenge_id = None
 
     def _pump(self):
         for entry in self.driver.get_log("performance"):
@@ -150,10 +218,11 @@ class NetworkWatcher:
 
             if method == "Network.requestWillBeSent":
                 req = params.get("request", {})
+                url = req.get("url", "")
                 self.order += 1
                 self.requests[rid] = {
                     "id": rid,
-                    "url": req.get("url", ""),
+                    "url": url,
                     "method": req.get("method", ""),
                     "type": params.get("type"),
                     "order": self.order,
@@ -161,6 +230,10 @@ class NetworkWatcher:
                     "done": False,
                     "error": None,
                 }
+                # Bật cờ tạm dừng ngay lập tức khi vừa phát sinh request lấy SliderCaptcha/Challenge
+                if re.search(EP_SLIDER_CHALLENGE, url, re.I):
+                    self.captcha_pending = True
+                    self._last_beep = 0
 
             elif rid in self.requests:
                 r = self.requests[rid]
@@ -171,6 +244,7 @@ class NetworkWatcher:
 
                 elif method == "Network.loadingFinished":
                     r["done"] = True
+                    self._inspect_for_captcha(r)
 
                 elif method == "Network.loadingFailed":
                     r["done"] = True
@@ -381,6 +455,8 @@ def js_click(driver, el):
 
 
 def dong_sach_modal_va_overlay(driver):
+    if gap_captcha_hoac_dang_nhap(driver):
+        return
     try:
         driver.execute_script("""
             document.querySelectorAll('.modal.in, .modal.show').forEach(m => {
@@ -396,7 +472,7 @@ def dong_sach_modal_va_overlay(driver):
                 m.setAttribute('aria-hidden', 'true');
             });
 
-            document.querySelectorAll('.modal-backdrop, div.jquery-loading-modal_bg, .popover')
+            document.querySelectorAll('.jconfirm, .modal-backdrop, div.jquery-loading-modal_bg, .popover')
                 .forEach(e => e.remove());
 
             document.body.classList.remove('modal-open');
@@ -646,6 +722,8 @@ def chon_phuong_xa(driver, watcher, maxa, timeout=40):
 
 def reset_trang(driver, watcher, maxa):
     print("🔄 Tải lại trang để làm sạch trạng thái...")
+    watcher.captcha_pending = False
+    watcher.captcha_challenge_id = None
     driver.get(BASE_URL)
     chon_phuong_xa(driver, watcher, maxa)
 
@@ -655,21 +733,33 @@ def reset_trang(driver, watcher, maxa):
 # =========================================================
 
 def gap_captcha_hoac_dang_nhap(driver):
-    """True nếu đang hiện captcha hoặc bị đẩy ra trang đăng nhập."""
+    """True nếu đang hiện captcha (bao gồm puzzle bg/piece base64) hoặc bị đẩy ra trang đăng nhập."""
     try:
         return driver.execute_script("""
             const visible = el => {
+                if (!el) return false;
                 const r = el.getBoundingClientRect();
                 const s = getComputedStyle(el);
-                return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+                return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
             };
             const css = [
                 "input[name='password']", "input[autocomplete='current-password']",
                 "[id*='captcha' i]", "[class*='captcha' i]", "[name*='captcha' i]",
+                "[id*='puzzle' i]", "[class*='puzzle' i]", "[id*='jigsaw' i]", "[class*='jigsaw' i]",
+                "[id*='challenge' i]", "[name*='challenge' i]",
                 "img[src*='captcha' i]", "iframe[src*='recaptcha']", "iframe[src*='hcaptcha']",
                 "iframe[src*='turnstile']", "iframe[title*='captcha' i]"
             ].join(',');
-            return [...document.querySelectorAll(css)].some(visible);
+            if ([...document.querySelectorAll(css)].some(visible)) {
+                return true;
+            }
+            // Nhận diện cặp ảnh base64 của puzzle captcha (bg: data:image/jpeg;base64, piece: data:image/png;base64)
+            const hasBg = [...document.querySelectorAll("img[src^='data:image/jpeg;base64,']")].some(visible);
+            const hasPiece = [...document.querySelectorAll("img[src^='data:image/png;base64,']")].some(visible);
+            if (hasBg && hasPiece) {
+                return true;
+            }
+            return false;
         """)
     except Exception:
         return False
@@ -830,11 +920,7 @@ def duyet_vao_van_hanh(driver, watcher, ma_gcn, timeout=30):
         watcher.poll()
         r = watcher.find(EP_SAVE_DANG_KY)
 
-        if r is None:
-            if time.time() - validate_xong > SAVE_GRACE:
-                break
-
-        elif r["done"]:
+        if r and r["done"]:
             # Save: server báo thành công bằng HTTP 2xx, không cần đọc body
             save = watcher.finish("luu_dang_ky", r, strict_json=False)
             break
@@ -843,8 +929,13 @@ def duyet_vao_van_hanh(driver, watcher, ma_gcn, timeout=30):
 
         # Đang captcha thì không tính giờ (cả timeout lẫn SAVE_GRACE)
         dung = watcher.tam_dung(time.time() - tick)
-        end_time += dung
-        validate_xong += dung
+        if dung > 0:
+            end_time += dung
+            validate_xong = time.time()
+            continue
+
+        if r is None and time.time() - validate_xong > SAVE_GRACE:
+            break
 
     else:
         raise NetworkError(
@@ -941,7 +1032,7 @@ def run_automation(username, password, maxa, excel_path, ten_cot):
 
             # Gặp captcha giữa chừng -> chờ người dùng giải rồi chạy lại đúng GCN này
             for lan_thu in range(1, MAX_LAN_CAPTCHA + 1):
-                if gap_captcha_hoac_dang_nhap(driver):
+                if watcher.dang_captcha():
                     cho_giai_captcha(driver, watcher, username, password, maxa)
 
                 try:
@@ -952,7 +1043,7 @@ def run_automation(username, password, maxa, excel_path, ten_cot):
                     traceback.print_exc()
                     trang_thai, ghi_chu = "Lỗi", str(e)
 
-                    if gap_captcha_hoac_dang_nhap(driver) and lan_thu < MAX_LAN_CAPTCHA:
+                    if watcher.dang_captcha() and lan_thu < MAX_LAN_CAPTCHA:
                         print(f"🧩 Lỗi do captcha/hết phiên, sẽ chạy lại GCN {ma_gcn}")
                         continue
 
@@ -960,7 +1051,7 @@ def run_automation(username, password, maxa, excel_path, ten_cot):
                         dong_sach_modal_va_overlay(driver)
                         reset_trang(driver, watcher, maxa)
                     except Exception as e2:
-                        if not gap_captcha_hoac_dang_nhap(driver):
+                        if not watcher.dang_captcha():
                             raise Exception(f"Không khôi phục được trang sau lỗi: {e2}")
                     break
 
